@@ -138,8 +138,8 @@ def train_with_unsloth(
     )
 
     # Load datasets
-    train_dataset = load_dataset('json', data_files=train_dataset_path)['train']
-    eval_dataset = load_dataset('json', data_files=eval_dataset_path)['train']
+    train_dataset = load_jsonl_dataset(train_dataset_path)['train']
+    eval_dataset = load_jsonl_dataset(eval_dataset_path)['train']
 
     # Format datasets
     def formatting_prompts_func(examples):

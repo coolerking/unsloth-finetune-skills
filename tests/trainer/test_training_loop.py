@@ -24,7 +24,7 @@ class TestLoadJsonlDataset:
 
     def test_load_valid_jsonl(self, tmp_path, mock_unsloth):
         """Test loading a valid JSONL file."""
-        from skills.unsloth_trainer.training_loop import load_jsonl_dataset
+        from unsloth_trainer.training_loop import load_jsonl_dataset
 
         # Create a test JSONL file
         test_file = tmp_path / "test.jsonl"
@@ -40,7 +40,7 @@ class TestLoadJsonlDataset:
         mock_dataset = MagicMock()
         mock_dataset.__len__ = MagicMock(return_value=2)
 
-        with patch('skills.unsloth_trainer.training_loop.load_dataset') as mock_load:
+        with patch('unsloth_trainer.training_loop.load_dataset') as mock_load:
             mock_load.return_value = mock_dataset
             result = load_jsonl_dataset(str(test_file))
             mock_load.assert_called_once_with('json', data_files=str(test_file))
@@ -48,7 +48,7 @@ class TestLoadJsonlDataset:
 
     def test_file_not_found(self, mock_unsloth):
         """Test handling of non-existent file."""
-        from skills.unsloth_trainer.training_loop import load_jsonl_dataset
+        from unsloth_trainer.training_loop import load_jsonl_dataset
 
         with pytest.raises(FileNotFoundError):
             load_jsonl_dataset("/nonexistent/path.jsonl")
@@ -59,7 +59,7 @@ class TestFormatInstruction:
 
     def test_format_with_thinking(self, mock_unsloth):
         """Test formatting with thinking field."""
-        from skills.unsloth_trainer.training_loop import format_instruction
+        from unsloth_trainer.training_loop import format_instruction
 
         example = {
             "instruction": "What is AI?",
@@ -78,7 +78,7 @@ class TestFormatInstruction:
 
     def test_format_without_thinking(self, mock_unsloth):
         """Test formatting without thinking field."""
-        from skills.unsloth_trainer.training_loop import format_instruction
+        from unsloth_trainer.training_loop import format_instruction
 
         example = {
             "instruction": "What is ML?",
@@ -96,7 +96,7 @@ class TestFormatInstruction:
 
     def test_format_missing_instruction(self, mock_unsloth):
         """Test formatting with missing instruction field."""
-        from skills.unsloth_trainer.training_loop import format_instruction
+        from unsloth_trainer.training_loop import format_instruction
 
         example = {"output": "Just output."}
 
@@ -105,7 +105,7 @@ class TestFormatInstruction:
 
     def test_format_missing_output(self, mock_unsloth):
         """Test formatting with missing output field."""
-        from skills.unsloth_trainer.training_loop import format_instruction
+        from unsloth_trainer.training_loop import format_instruction
 
         example = {"instruction": "Just instruction."}
 
@@ -148,14 +148,14 @@ class TestTrainWithUnsloth:
         self, tmp_path, mock_unsloth, mock_train_dataset, mock_eval_dataset, default_params
     ):
         """Test successful training."""
-        from skills.unsloth_trainer.training_loop import train_with_unsloth
+        from unsloth_trainer.training_loop import train_with_unsloth
 
         # Mock unsloth FastLanguageModel
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
         mock_tokenizer.eos_token = "<|im_end|>"
 
-        with patch('skills.unsloth_trainer.training_loop.FastLanguageModel') as mock_flm:
+        with patch('unsloth_trainer.training_loop.FastLanguageModel') as mock_flm:
             mock_flm.from_pretrained.return_value = (mock_model, mock_tokenizer)
             mock_flm.get_peft_model.return_value = (mock_model, mock_tokenizer)
 
@@ -166,8 +166,8 @@ class TestTrainWithUnsloth:
             )
             mock_trainer.evaluate.return_value = {'eval_loss': 0.3}
 
-            with patch('skills.unsloth_trainer.training_loop.SFTTrainer', return_value=mock_trainer):
-                with patch('skills.unsloth_trainer.training_loop.load_dataset') as mock_load:
+            with patch('unsloth_trainer.training_loop.SFTTrainer', return_value=mock_trainer):
+                with patch('unsloth_trainer.training_loop.load_jsonl_dataset') as mock_load:
                     mock_load.side_effect = [mock_train_dataset, mock_eval_dataset]
 
                     output_dir = str(tmp_path / "output")
@@ -193,13 +193,13 @@ class TestTrainWithUnsloth:
         self, tmp_path, mock_unsloth, mock_train_dataset, mock_eval_dataset, default_params
     ):
         """Test that LoRA configuration is passed correctly."""
-        from skills.unsloth_trainer.training_loop import train_with_unsloth
+        from unsloth_trainer.training_loop import train_with_unsloth
 
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
         mock_tokenizer.eos_token = "<|im_end|>"
 
-        with patch('skills.unsloth_trainer.training_loop.FastLanguageModel') as mock_flm:
+        with patch('unsloth_trainer.training_loop.FastLanguageModel') as mock_flm:
             mock_flm.from_pretrained.return_value = (mock_model, mock_tokenizer)
             mock_flm.get_peft_model.return_value = (mock_model, mock_tokenizer)
 
@@ -209,8 +209,8 @@ class TestTrainWithUnsloth:
                 metrics={'eval_loss': 0.3}
             )
 
-            with patch('skills.unsloth_trainer.training_loop.SFTTrainer', return_value=mock_trainer):
-                with patch('skills.unsloth_trainer.training_loop.load_dataset') as mock_load:
+            with patch('unsloth_trainer.training_loop.SFTTrainer', return_value=mock_trainer):
+                with patch('unsloth_trainer.training_loop.load_jsonl_dataset') as mock_load:
                     mock_load.side_effect = [mock_train_dataset, mock_eval_dataset]
 
                     output_dir = str(tmp_path / "output")
@@ -232,7 +232,7 @@ class TestTrainWithUnsloth:
         self, tmp_path, mock_unsloth
     ):
         """Test handling of missing required parameters."""
-        from skills.unsloth_trainer.training_loop import train_with_unsloth
+        from unsloth_trainer.training_loop import train_with_unsloth
 
         incomplete_params = {
             'learning_rate': 2e-4,
