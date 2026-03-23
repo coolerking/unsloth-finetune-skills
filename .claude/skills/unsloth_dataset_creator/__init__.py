@@ -96,7 +96,7 @@ def create_dataset(
     Args:
         pdf_dir: Directory containing PDF files
         output_dir: Directory to write output files
-        config: Configuration dict with use_rag, use_thinking, use_tools, target_samples
+        config: Configuration dict with use_thinking, target_samples
         llm_provider: LLM provider name (e.g., "groq")
         llm_config: LLM configuration dict
 
