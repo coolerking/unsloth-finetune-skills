@@ -1,9 +1,9 @@
 """PDF text extraction utilities."""
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pdfminer.high_level import extract_text
 
-def extract_text_from_pdf(pdf_path: Path) -> Optional[Dict[str, any]]:
+def extract_text_from_pdf(pdf_path: Path) -> Optional[Dict[str, Any]]:
     """Extract text from a PDF file."""
     try:
         text = extract_text(str(pdf_path))
