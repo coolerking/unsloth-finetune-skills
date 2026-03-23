@@ -13,7 +13,7 @@ Evaluates fine-tuned models and provides automatic improvement loop.
 {
   "model_path": "/path/to/model",
   "eval_dataset": "/path/to/eval.jsonl",
-  "metric": "rouge_l",
+  "metric": "exact_match",
   "threshold": 0.8,
   "max_iterations": 5
 }

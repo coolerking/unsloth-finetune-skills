@@ -14,7 +14,7 @@ Fine-tunes models using unsloth for efficient training with Optuna hyperparamete
   "train_dataset": "/path/to/train.jsonl",
   "eval_dataset": "/path/to/eval.jsonl",
   "output_dir": "/path/to/output",
-  "base_model": "gpt-oss:20b",
+  "base_model": "unsloth/Llama-3.2-3B-Instruct",
   "optuna_config": {
     "n_trials": 20,
     "max_epochs": 5,

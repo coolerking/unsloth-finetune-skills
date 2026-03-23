@@ -21,8 +21,8 @@ Creates fine-tuning datasets from PDF documents.
   },
   "llm_provider": "groq",
   "llm_config": {
-    "model": "gpt-oss:20b",
-    "api_key": "...",
+    "model": "unsloth/Llama-3.2-3B-Instruct",
+    "api_key": "${GROQ_API_KEY}",
     "base_url": "..."
   }
 }
