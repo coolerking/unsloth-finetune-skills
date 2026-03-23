@@ -86,3 +86,12 @@ def test_chunk_text_very_short_text():
     chunks = chunk_text(doc_info, chunk_size=50, chunk_overlap=10)
     assert len(chunks) == 1
     assert chunks[0]['text'] == 'Hi'
+
+
+def test_split_by_tokens_invalid_overlap():
+    """Test that chunk_size <= overlap raises ValueError."""
+    text = "This is a test sentence. " * 50
+    with pytest.raises(ValueError, match="chunk_size .* must be greater than overlap"):
+        split_by_tokens(text, chunk_size=10, overlap=10)
+    with pytest.raises(ValueError, match="chunk_size .* must be greater than overlap"):
+        split_by_tokens(text, chunk_size=5, overlap=10)
