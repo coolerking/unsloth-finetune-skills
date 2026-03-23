@@ -31,6 +31,10 @@ def split_by_sections(text: str, section_keywords: List[str] = None) -> List[str
 
 def split_by_tokens(text: str, chunk_size: int, overlap: int) -> List[str]:
     """Split text into fixed-size chunks with overlap."""
+    if not text or not text.strip():
+        return []
+    if chunk_size <= overlap:
+        raise ValueError(f"chunk_size ({chunk_size}) must be greater than overlap ({overlap})")
     tokens = _tokenizer.encode(text)
     chunks = []
     start = 0
@@ -50,7 +54,9 @@ def chunk_text(
     section_keywords: List[str] = None
 ) -> List[Dict]:
     """Hybrid chunking: section-based then token-based."""
-    text = doc_info['text']
+    text = doc_info.get('text', '')
+    if not text or not text.strip():
+        return []
     chunks = []
     sections = split_by_sections(text, section_keywords)
     for idx, section in enumerate(sections):

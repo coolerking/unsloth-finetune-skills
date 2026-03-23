@@ -44,3 +44,45 @@ def test_chunk_text():
     assert len(chunks) > 0
     assert 'chunk_id' in chunks[0]
     assert 'token_count' in chunks[0]
+
+
+def test_split_by_tokens_empty_text():
+    """Test split_by_tokens handles empty text."""
+    assert split_by_tokens("", chunk_size=20, overlap=5) == []
+    assert split_by_tokens("   ", chunk_size=20, overlap=5) == []
+    assert split_by_tokens("\n\n", chunk_size=20, overlap=5) == []
+
+
+def test_chunk_text_empty_text():
+    """Test chunk_text handles empty text gracefully."""
+    doc_info_empty = {
+        'text': '',
+        'filename': 'test.pdf',
+        'category': 'test'
+    }
+    assert chunk_text(doc_info_empty) == []
+
+    doc_info_whitespace = {
+        'text': '   \n\n  ',
+        'filename': 'test.pdf',
+        'category': 'test'
+    }
+    assert chunk_text(doc_info_whitespace) == []
+
+    doc_info_missing_text = {
+        'filename': 'test.pdf',
+        'category': 'test'
+    }
+    assert chunk_text(doc_info_missing_text) == []
+
+
+def test_chunk_text_very_short_text():
+    """Test chunk_text handles very short text."""
+    doc_info = {
+        'text': 'Hi',
+        'filename': 'test.pdf',
+        'category': 'test'
+    }
+    chunks = chunk_text(doc_info, chunk_size=50, chunk_overlap=10)
+    assert len(chunks) == 1
+    assert chunks[0]['text'] == 'Hi'

@@ -4,10 +4,30 @@ from typing import Any, Dict, Optional
 import json
 
 
+class ConfigError(Exception):
+    """Custom exception for configuration errors."""
+    pass
+
+
 def load_config(config_path: Path) -> Dict[str, Any]:
-    """Load configuration from JSON file."""
-    with open(config_path, 'r') as f:
-        return json.load(f)
+    """Load configuration from JSON file.
+
+    Args:
+        config_path: Path to the JSON configuration file.
+
+    Returns:
+        Dictionary containing the configuration.
+
+    Raises:
+        ConfigError: If the file is not found or contains invalid JSON.
+    """
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError as e:
+        raise ConfigError(f"Configuration file not found: {config_path}") from e
+    except json.JSONDecodeError as e:
+        raise ConfigError(f"Invalid JSON in configuration file: {config_path} - {e}") from e
 
 
 def save_config(config: Dict[str, Any], config_path: Path) -> None:
