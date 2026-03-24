@@ -103,15 +103,16 @@ def analyze_failures(eval_results: Dict[str, Any]) -> Dict[str, Any]:
 
         # Check for partial matches
         ref_words = set(ref_lower.split())
-        pred_words = set(pred_lower.split())
-        if ref_words and len(ref_words & pred_words) > 0:
+        pred_words_set = set(pred_lower.split())
+        if ref_words and len(ref_words & pred_words_set) > 0:
             patterns["partial_match"] += 1
         else:
             patterns["no_overlap"] += 1
 
         # Check for repetitive output
-        unique_words = len(set(pred_words))
-        total_words = len(pred_words)
+        pred_words_list = pred_lower.split()
+        unique_words = len(set(pred_words_list))
+        total_words = len(pred_words_list)
         if total_words > 10 and unique_words / total_words < 0.3:
             patterns["repetitive_output"] += 1
 
