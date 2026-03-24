@@ -1,16 +1,21 @@
-"""Integration test for the full fine-tuning workflow."""
+"""Integration test for the complete fine-tuning workflow.
+
+This module tests the end-to-end workflow orchestration including:
+- Dataset creation via unsloth_dataset_creator
+- Model fine-tuning via unsloth_trainer
+- Workflow orchestration via unsloth_fine_tuning_orchestrator
+"""
 import pytest
 import json
+import sys
 from pathlib import Path
 from datetime import datetime
 from unittest.mock import patch, MagicMock
 
-from skills.shared.run_id import generate_run_id
-from skills.shared.paths import get_run_paths, ensure_run_dirs
-from skills.unsloth_dataset_creator.pdf_processor import extract_text_from_pdf, get_all_pdf_files
-from skills.unsloth_dataset_creator.chunker import chunk_text, count_tokens, split_by_sections, split_by_tokens
-from skills.unsloth_dataset_creator.qa_generator import validate_qa, parse_qa_response, create_qa_generation_prompt
-from skills.unsloth_trainer.optuna_config import get_default_search_space, sample_params
+# Add skills to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / ".claude" / "skills"))
+
+from unsloth_fine_tuning_orchestrator import run_workflow
 
 
 # =============================================================================
@@ -18,412 +23,494 @@ from skills.unsloth_trainer.optuna_config import get_default_search_space, sampl
 # =============================================================================
 
 @pytest.fixture
-def sample_pdf_structure(tmp_path):
-    """Create a sample PDF directory structure for testing."""
-    category_dir = tmp_path / "category_a"
+def temp_pdf_dir(tmp_path):
+    """Create a temporary PDF directory with a mock PDF file."""
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+
+    # Create a mock PDF file (just a text file for testing)
+    category_dir = pdf_dir / "regulations"
     category_dir.mkdir()
-    pdf_file = category_dir / "test.pdf"
-    pdf_file.write_text("dummy pdf content")
-    return tmp_path, category_dir, pdf_file
+    pdf_file = category_dir / "test_doc.pdf"
+    pdf_file.write_text("Mock PDF content for testing")
+
+    return str(pdf_dir)
 
 
 @pytest.fixture
-def sample_doc_info():
-    """Return sample document info for chunking tests."""
-    return {
-        'filename': 'test_doc.pdf',
-        'category': 'regulations',
-        'text': '第1条 This is the first section of text.\n第2条 This is the second section with more content.'
-    }
+def temp_output_dir(tmp_path):
+    """Create a temporary output directory."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    return str(output_dir)
 
 
 @pytest.fixture
-def sample_chunk():
-    """Return sample chunk for Q&A generation tests."""
+def sample_config():
+    """Return sample configuration for dataset creation."""
     return {
-        'filename': 'test.pdf',
-        'category': 'regulations',
-        'text': 'This is a sample regulation text for testing purposes. ' * 20,
-        'chunk_id': 'test_chunk_001',
-        'token_count': 100
+        "use_thinking": True,
+        "target_samples": 10
     }
 
 
 @pytest.fixture
-def valid_qa():
-    """Return a valid Q&A dictionary."""
+def sample_llm_config():
+    """Return sample LLM configuration."""
     return {
-        'question': 'What is the regulation about?',
-        'answer': 'This is a detailed answer that explains the regulation in depth with sufficient length to pass validation.',
-        'thinking': 'The thinking process involves analyzing the text and extracting key information.'
+        "api_key": "test_api_key",
+        "model": "llama-3.1-8b-instant",
+        "temperature": 0.7,
+        "max_tokens": 2048
     }
 
 
-# =============================================================================
-# Run ID and Path Tests
-# =============================================================================
-
-def test_run_id_generation():
-    """Test that run_id is generated in correct format."""
-    run_id = generate_run_id()
-    assert len(run_id) > 0
-    assert '_' in run_id
-    # Verify format: YYYYMMDD_HHMMSS_suffix
-    parts = run_id.split('_')
-    assert len(parts) == 3  # YYYYMMDD, HHMMSS, suffix
-    assert len(parts[0]) == 8  # YYYYMMDD
-    assert len(parts[1]) == 6  # HHMMSS
-    assert len(parts[2]) == 4  # suffix
-    # Verify timestamp is valid
-    timestamp = parts[0] + parts[1]
-    assert len(timestamp) == 14
-    assert timestamp.isdigit()
-
-
-def test_run_id_uniqueness():
-    """Test that generated run_ids are unique."""
-    run_ids = [generate_run_id() for _ in range(10)]
-    assert len(set(run_ids)) == len(run_ids)
-
-
-def test_run_paths_creation(tmp_path):
-    """Test that run paths are created correctly."""
-    paths = get_run_paths("test_run_001", base_dir=str(tmp_path))
-    ensure_run_dirs(paths)
-    assert paths["dataset"].exists()
-    assert paths["training"].exists()
-    assert paths["evaluation"].exists()
-    assert paths["logs"].exists()
-    assert paths["metadata"].name == "metadata.json"
-
-
-def test_run_paths_structure():
-    """Test that run paths have correct structure."""
-    paths = get_run_paths("test_run_001", base_dir="/tmp/test")
-    assert paths["base"] == Path("/tmp/test/test_run_001")
-    assert paths["dataset"] == Path("/tmp/test/test_run_001/00_dataset")
-    assert paths["training"] == Path("/tmp/test/test_run_001/01_training")
-    assert paths["evaluation"] == Path("/tmp/test/test_run_001/02_evaluation")
-    assert paths["logs"] == Path("/tmp/test/test_run_001/logs")
-
-
-def test_full_run_workflow(tmp_path):
-    """Test complete workflow: run_id -> paths -> directory creation."""
-    # Generate run_id
-    run_id = generate_run_id()
-    assert run_id
-
-    # Get paths
-    paths = get_run_paths(run_id, base_dir=str(tmp_path))
-    assert paths["base"].name == run_id
-
-    # Create directories
-    ensure_run_dirs(paths)
-    assert paths["base"].exists()
-
-    # Verify all subdirectories exist
-    for key in ["dataset", "training", "evaluation", "logs"]:
-        assert paths[key].exists()
-        assert paths[key].is_dir()
-
-
-# =============================================================================
-# PDF Processor Tests
-# =============================================================================
-
-def test_get_all_pdf_files(sample_pdf_structure):
-    """Test finding all PDF files in directory."""
-    tmp_path, category_dir, pdf_file = sample_pdf_structure
-    pdf_files = get_all_pdf_files(tmp_path)
-    assert len(pdf_files) == 1
-    assert pdf_files[0].name == "test.pdf"
-
-
-def test_get_all_pdf_files_excludes_checkpoints(sample_pdf_structure):
-    """Test that checkpoint directories are excluded."""
-    tmp_path, category_dir, pdf_file = sample_pdf_structure
-    # Create checkpoint directory with PDF
-    checkpoint_dir = category_dir / ".ipynb_checkpoints"
-    checkpoint_dir.mkdir()
-    checkpoint_pdf = checkpoint_dir / "checkpoint.pdf"
-    checkpoint_pdf.write_text("checkpoint content")
-
-    pdf_files = get_all_pdf_files(tmp_path)
-    assert len(pdf_files) == 1
-    assert pdf_files[0].name == "test.pdf"
-
-
-@patch('skills.unsloth_dataset_creator.pdf_processor.extract_text')
-def test_extract_text_from_pdf_success(mock_extract_text, sample_pdf_structure):
-    """Test PDF text extraction with mock."""
-    tmp_path, category_dir, pdf_file = sample_pdf_structure
-    mock_extract_text.return_value = "Extracted PDF text content"
-
-    result = extract_text_from_pdf(pdf_file)
-
-    assert result is not None
-    assert result['filename'] == "test.pdf"
-    assert result['category'] == "category_a"
-    assert result['text'] == "Extracted PDF text content"
-    assert result['char_count'] == len("Extracted PDF text content")
-    assert result['path'] == str(pdf_file)
-
-
-@patch('skills.unsloth_dataset_creator.pdf_processor.extract_text')
-def test_extract_text_from_pdf_error(mock_extract_text, sample_pdf_structure):
-    """Test PDF extraction handles errors gracefully."""
-    tmp_path, category_dir, pdf_file = sample_pdf_structure
-    mock_extract_text.side_effect = Exception("PDF read error")
-
-    result = extract_text_from_pdf(pdf_file)
-
-    assert result is None
-
-
-# =============================================================================
-# Chunker Tests
-# =============================================================================
-
-def test_count_tokens():
-    """Test token counting function."""
-    text = "Hello world"
-    count = count_tokens(text)
-    assert isinstance(count, int)
-    assert count > 0
-
-
-def test_split_by_sections():
-    """Test section-based text splitting."""
-    text = "第1条 First section\nSome content\n第2条 Second section\nMore content"
-    sections = split_by_sections(text)
-    assert len(sections) == 2
-    assert "第1条" in sections[0]
-    assert "第2条" in sections[1]
-
-
-def test_split_by_sections_custom_keywords():
-    """Test section splitting with custom keywords."""
-    text = "Section A\nContent\nSection B\nMore content"
-    sections = split_by_sections(text, section_keywords=["Section"])
-    assert len(sections) == 2
-
-
-def test_split_by_tokens():
-    """Test token-based text splitting."""
-    text = "This is a test sentence with multiple words. " * 50
-    chunks = split_by_tokens(text, chunk_size=50, overlap=10)
-    assert len(chunks) > 0
-    # Verify overlap works
-    if len(chunks) > 1:
-        assert len(chunks[0]) > len(chunks[1]) * 0.5  # Some overlap expected
-
-
-def test_chunk_text(sample_doc_info):
-    """Test full chunking pipeline."""
-    chunks = chunk_text(sample_doc_info, chunk_size=100, chunk_overlap=20)
-
-    assert isinstance(chunks, list)
-    assert len(chunks) > 0
-
-    for chunk in chunks:
-        assert 'text' in chunk
-        assert 'filename' in chunk
-        assert 'category' in chunk
-        assert 'chunk_id' in chunk
-        assert 'token_count' in chunk
-        assert chunk['filename'] == sample_doc_info['filename']
-        assert chunk['category'] == sample_doc_info['category']
-        assert chunk['token_count'] > 0
-
-
-def test_chunk_text_large_section():
-    """Test chunking when section exceeds chunk_size."""
-    doc_info = {
-        'filename': 'large_doc.pdf',
-        'category': 'test',
-        'text': '第1条 ' + 'word ' * 1000  # Large section
-    }
-    chunks = chunk_text(doc_info, chunk_size=100, chunk_overlap=20)
-    assert len(chunks) > 1
-
-
-# =============================================================================
-# Q&A Generator Tests
-# =============================================================================
-
-def test_validate_qa_valid(valid_qa):
-    """Test validation of valid Q&A."""
-    assert validate_qa(valid_qa) is True
-
-
-def test_validate_qa_short_answer(valid_qa):
-    """Test validation fails for short answer."""
-    qa = valid_qa.copy()
-    qa['answer'] = 'Short'
-    assert validate_qa(qa, min_answer_length=50) is False
-
-
-def test_validate_qa_empty_question(valid_qa):
-    """Test validation fails for empty question."""
-    qa = valid_qa.copy()
-    qa['question'] = ''
-    assert validate_qa(qa) is False
-
-
-def test_validate_qa_empty_answer(valid_qa):
-    """Test validation fails for empty answer."""
-    qa = valid_qa.copy()
-    qa['answer'] = ''
-    assert validate_qa(qa) is False
-
-
-def test_validate_qa_empty_thinking(valid_qa):
-    """Test validation fails for empty thinking."""
-    qa = valid_qa.copy()
-    qa['thinking'] = ''
-    assert validate_qa(qa) is False
-
-
-def test_parse_qa_response_json():
-    """Test parsing JSON response."""
-    response = '{"question": "Q?", "answer": "A" * 100, "thinking": "T"}'
-    result = parse_qa_response(response.replace('"A" * 100', '"' + 'A' * 100 + '"'))
-    assert result is not None
-
-
-def test_parse_qa_response_with_code_block():
-    """Test parsing response with markdown code block."""
-    response = '''```json
-{"question": "Q?", "answer": "Answer text here", "thinking": "Thinking process"}
-```'''
-    result = parse_qa_response(response)
-    assert result is not None
-    assert result['question'] == "Q?"
-
-
-def test_parse_qa_response_invalid_json():
-    """Test parsing invalid JSON response."""
-    response = "Not valid JSON"
-    result = parse_qa_response(response)
-    assert result is None
-
-
-def test_create_qa_generation_prompt(sample_chunk):
-    """Test prompt creation for Q&A generation."""
-    prompt = create_qa_generation_prompt(sample_chunk, "事実確認型", 1)
-
-    assert sample_chunk['filename'] in prompt
-    assert sample_chunk['category'] in prompt
-    assert sample_chunk['text'][:100] in prompt
-    assert "事実確認型" in prompt
-    assert "JSON" in prompt
-
-
-def test_create_qa_generation_prompt_truncates_long_text(sample_chunk):
-    """Test that long text is truncated in prompt."""
-    sample_chunk['text'] = 'word ' * 1000  # Long text
-    prompt = create_qa_generation_prompt(sample_chunk, "手続き型", 1)
-    assert '...' in prompt or len(prompt) < len(sample_chunk['text'])
-
-
-# =============================================================================
-# Optuna Config Tests
-# =============================================================================
-
-def test_get_default_search_space():
-    """Test default search space structure."""
-    space = get_default_search_space()
-
-    required_keys = ['learning_rate', 'lora_rank', 'lora_alpha', 'lora_dropout', 'batch_size', 'num_epochs']
-    for key in required_keys:
-        assert key in space
-
-    # Verify structure of each parameter
-    assert space['learning_rate']['type'] == 'float'
-    assert space['lora_rank']['type'] == 'categorical'
-    assert 'choices' in space['lora_rank']
-
-
-def test_sample_params():
-    """Test parameter sampling from search space."""
-    space = get_default_search_space()
-
-    # Create a mock trial
-    mock_trial = MagicMock()
-    mock_trial.suggest_float.return_value = 1e-4
-    mock_trial.suggest_int.return_value = 3
-    mock_trial.suggest_categorical.side_effect = [16, 32, 2]
-
-    params = sample_params(mock_trial, space)
-
-    assert 'learning_rate' in params
-    assert 'lora_rank' in params
-    assert 'lora_alpha' in params
-    assert 'lora_dropout' in params
-    assert 'batch_size' in params
-    assert 'num_epochs' in params
-
-
-# =============================================================================
-# Integration Workflow Tests
-# =============================================================================
-
-def test_end_to_end_chunking_workflow():
-    """Test full workflow from doc_info to chunks."""
-    doc_info = {
-        'filename': 'integration_test.pdf',
-        'category': 'hr_policies',
-        'text': '''第1条 Employee Conduct
-All employees must follow company policies and maintain professional behavior.
-第2条 Leave Policy
-Employees are entitled to annual leave based on their years of service.'''
-    }
-
-    # Chunk the document
-    chunks = chunk_text(doc_info, chunk_size=100, chunk_overlap=20)
-
-    assert len(chunks) >= 2
-    for chunk in chunks:
-        assert chunk['filename'] == 'integration_test.pdf'
-        assert chunk['category'] == 'hr_policies'
-        assert chunk['token_count'] <= 100 + 20  # Allow some margin
-
-
-def test_run_id_to_chunk_workflow(tmp_path):
-    """Test workflow from run_id generation through directory creation to chunk storage."""
-    # Generate run_id
-    run_id = generate_run_id()
-
-    # Create paths
-    paths = get_run_paths(run_id, base_dir=str(tmp_path))
-    ensure_run_dirs(paths)
-
-    # Create sample chunks
-    chunks = [
-        {
-            'text': 'Sample chunk 1',
-            'filename': 'doc1.pdf',
-            'category': 'cat1',
-            'chunk_id': 'chunk_001',
-            'token_count': 10
-        },
-        {
-            'text': 'Sample chunk 2',
-            'filename': 'doc2.pdf',
-            'category': 'cat2',
-            'chunk_id': 'chunk_002',
-            'token_count': 15
+@pytest.fixture
+def mock_dataset_result(temp_output_dir):
+    """Return a mock successful dataset result."""
+    dataset_dir = Path(temp_output_dir) / "dataset"
+    return {
+        "status": "success",
+        "message": "Successfully created dataset with 10 samples",
+        "metadata": {
+            "total_samples": 10,
+            "train_count": 9,
+            "eval_count": 1,
+            "source_documents": 1,
+            "total_chunks": 5
         }
-    ]
+    }
 
-    # Save chunks to dataset directory
-    chunks_file = paths['dataset'] / 'chunks.json'
-    with open(chunks_file, 'w') as f:
-        json.dump(chunks, f)
 
-    # Verify file was created and content is correct
-    assert chunks_file.exists()
-    with open(chunks_file, 'r') as f:
-        loaded_chunks = json.load(f)
-    assert len(loaded_chunks) == 2
-    assert loaded_chunks[0]['chunk_id'] == 'chunk_001'
+@pytest.fixture
+def mock_training_result(temp_output_dir):
+    """Return a mock successful training result."""
+    return {
+        "status": "success",
+        "best_model_path": str(Path(temp_output_dir) / "training" / "best_model"),
+        "best_params": {
+            "learning_rate": 5e-5,
+            "lora_rank": 16,
+            "lora_alpha": 32,
+            "lora_dropout": 0.1,
+            "batch_size": 2,
+            "num_epochs": 3
+        },
+        "best_eval_loss": 0.5,
+        "output_dir": str(Path(temp_output_dir) / "training"),
+        "study_file": str(Path(temp_output_dir) / "training" / "optuna_study.json")
+    }
+
+
+# =============================================================================
+# Full Workflow Integration Tests
+# =============================================================================
+
+@patch("unsloth_fine_tuning_orchestrator.create_dataset")
+@patch("unsloth_fine_tuning_orchestrator.fine_tune")
+def test_full_workflow_integration(
+    mock_fine_tune,
+    mock_create_dataset,
+    temp_pdf_dir,
+    temp_output_dir,
+    sample_config,
+    sample_llm_config,
+    mock_dataset_result,
+    mock_training_result
+):
+    """Test the complete workflow from dataset creation to model training.
+
+    This test verifies that:
+    1. run_workflow() orchestrates all steps correctly
+    2. Dataset creation is called with correct arguments
+    3. Training is called with correct arguments
+    4. Result contains all expected fields
+    5. Workflow completes successfully
+    """
+    # Setup mocks
+    mock_create_dataset.return_value = mock_dataset_result
+    mock_fine_tune.return_value = mock_training_result
+
+    # Execute workflow
+    result = run_workflow(
+        pdf_dir=temp_pdf_dir,
+        output_dir=temp_output_dir,
+        base_model="unsloth/Llama-3.2-3B-Instruct",
+        config=sample_config,
+        llm_provider="groq",
+        llm_config=sample_llm_config
+    )
+
+    # Verify result structure
+    assert result["status"] == "success"
+    assert "run_id" in result
+    assert "paths" in result
+    assert "metadata" in result
+    assert "dataset_result" in result
+    assert "training_result" in result
+    assert "evaluation_result" in result
+
+    # Verify paths
+    assert "run_dir" in result["paths"]
+    assert "dataset_dir" in result["paths"]
+    assert "training_dir" in result["paths"]
+    assert "evaluation_dir" in result["paths"]
+
+    # Verify metadata
+    assert result["metadata"]["base_model"] == "unsloth/Llama-3.2-3B-Instruct"
+    assert result["metadata"]["pdf_dir"] == temp_pdf_dir
+    assert result["metadata"]["config"] == sample_config
+    assert result["metadata"]["llm_provider"] == "groq"
+
+    # Verify dataset was called with correct arguments
+    mock_create_dataset.assert_called_once()
+    call_args = mock_create_dataset.call_args
+    assert call_args.kwargs["pdf_dir"] == temp_pdf_dir
+    assert "output_dir" in call_args.kwargs
+    assert call_args.kwargs["config"] == sample_config
+    assert call_args.kwargs["llm_provider"] == "groq"
+    assert call_args.kwargs["llm_config"] == sample_llm_config
+
+    # Verify training was called with correct arguments
+    mock_fine_tune.assert_called_once()
+    call_args = mock_fine_tune.call_args
+    assert "train_dataset" in call_args.kwargs
+    assert "eval_dataset" in call_args.kwargs
+    assert "output_dir" in call_args.kwargs
+    assert call_args.kwargs["base_model"] == "unsloth/Llama-3.2-3B-Instruct"
+
+    # Verify result contains mock data
+    assert result["dataset_result"] == mock_dataset_result
+    assert result["training_result"] == mock_training_result
+    assert result["evaluation_result"]["status"] == "placeholder"
+
+
+@patch("unsloth_fine_tuning_orchestrator.create_dataset")
+@patch("unsloth_fine_tuning_orchestrator.fine_tune")
+def test_workflow_with_dataset_failure(
+    mock_fine_tune,
+    mock_create_dataset,
+    temp_pdf_dir,
+    temp_output_dir,
+    sample_config,
+    sample_llm_config
+):
+    """Test that training is skipped when dataset creation fails.
+
+    This test verifies that:
+    1. When dataset creation fails, training is not attempted
+    2. Error status is returned with appropriate message
+    3. Dataset error details are included in result
+    """
+    # Setup mock to return failure
+    mock_create_dataset.return_value = {
+        "status": "error",
+        "message": "No PDF files found in directory",
+        "metadata": {}
+    }
+
+    # Execute workflow
+    result = run_workflow(
+        pdf_dir=temp_pdf_dir,
+        output_dir=temp_output_dir,
+        base_model="unsloth/Llama-3.2-3B-Instruct",
+        config=sample_config,
+        llm_provider="groq",
+        llm_config=sample_llm_config
+    )
+
+    # Verify error handling
+    assert result["status"] == "error"
+    assert "Dataset creation failed" in result["error"]
+    assert "No PDF files found" in result["error"]
+
+    # Verify training was NOT called
+    mock_fine_tune.assert_not_called()
+
+    # Verify dataset result is included
+    assert result["dataset_result"] is not None
+    assert result["dataset_result"]["status"] == "error"
+
+    # Verify training result is None (not attempted)
+    assert result["training_result"] is None
+
+
+@patch("unsloth_fine_tuning_orchestrator.create_dataset")
+@patch("unsloth_fine_tuning_orchestrator.fine_tune")
+def test_workflow_with_training_failure(
+    mock_fine_tune,
+    mock_create_dataset,
+    temp_pdf_dir,
+    temp_output_dir,
+    sample_config,
+    sample_llm_config,
+    mock_dataset_result
+):
+    """Test proper error handling when training fails.
+
+    This test verifies that:
+    1. When training fails, error is properly propagated
+    2. Error status is returned with training error details
+    3. Dataset result is preserved in output
+    """
+    # Setup mocks
+    mock_create_dataset.return_value = mock_dataset_result
+    mock_fine_tune.return_value = {
+        "status": "error",
+        "error": "CUDA out of memory",
+        "output_dir": str(Path(temp_output_dir) / "training")
+    }
+
+    # Execute workflow
+    result = run_workflow(
+        pdf_dir=temp_pdf_dir,
+        output_dir=temp_output_dir,
+        base_model="unsloth/Llama-3.2-3B-Instruct",
+        config=sample_config,
+        llm_provider="groq",
+        llm_config=sample_llm_config
+    )
+
+    # Verify error handling
+    assert result["status"] == "error"
+    assert "Training failed" in result["error"]
+    assert "CUDA out of memory" in result["error"]
+
+    # Verify both steps were called
+    mock_create_dataset.assert_called_once()
+    mock_fine_tune.assert_called_once()
+
+    # Verify dataset result is preserved
+    assert result["dataset_result"] == mock_dataset_result
+
+    # Verify training result contains error
+    assert result["training_result"] is not None
+    assert result["training_result"]["status"] == "error"
+
+
+@patch("unsloth_fine_tuning_orchestrator.create_dataset")
+@patch("unsloth_fine_tuning_orchestrator.fine_tune")
+def test_workflow_with_dataset_exception(
+    mock_fine_tune,
+    mock_create_dataset,
+    temp_pdf_dir,
+    temp_output_dir,
+    sample_config,
+    sample_llm_config
+):
+    """Test error handling when dataset creation raises an exception.
+
+    This test verifies that:
+    1. Exceptions in dataset creation are caught and handled
+    2. Error message includes exception details
+    3. Training is not attempted
+    """
+    # Setup mock to raise exception
+    mock_create_dataset.side_effect = Exception("PDF extraction failed: corrupted file")
+
+    # Execute workflow
+    result = run_workflow(
+        pdf_dir=temp_pdf_dir,
+        output_dir=temp_output_dir,
+        base_model="unsloth/Llama-3.2-3B-Instruct",
+        config=sample_config,
+        llm_provider="groq",
+        llm_config=sample_llm_config
+    )
+
+    # Verify error handling
+    assert result["status"] == "error"
+    assert "Dataset creation failed" in result["error"]
+    assert "PDF extraction failed" in result["error"]
+
+    # Verify training was NOT called
+    mock_fine_tune.assert_not_called()
+
+
+@patch("unsloth_fine_tuning_orchestrator.create_dataset")
+@patch("unsloth_fine_tuning_orchestrator.fine_tune")
+def test_workflow_with_training_exception(
+    mock_fine_tune,
+    mock_create_dataset,
+    temp_pdf_dir,
+    temp_output_dir,
+    sample_config,
+    sample_llm_config,
+    mock_dataset_result
+):
+    """Test error handling when training raises an exception.
+
+    This test verifies that:
+    1. Exceptions in training are caught and handled
+    2. Error message includes exception details
+    3. Dataset result is preserved
+    """
+    # Setup mocks
+    mock_create_dataset.return_value = mock_dataset_result
+    mock_fine_tune.side_effect = Exception("Model loading failed: invalid model name")
+
+    # Execute workflow
+    result = run_workflow(
+        pdf_dir=temp_pdf_dir,
+        output_dir=temp_output_dir,
+        base_model="unsloth/Llama-3.2-3B-Instruct",
+        config=sample_config,
+        llm_provider="groq",
+        llm_config=sample_llm_config
+    )
+
+    # Verify error handling
+    assert result["status"] == "error"
+    assert "Training failed" in result["error"]
+    assert "Model loading failed" in result["error"]
+
+    # Verify dataset result is preserved
+    assert result["dataset_result"] == mock_dataset_result
+
+
+@patch("unsloth_fine_tuning_orchestrator.create_dataset")
+@patch("unsloth_fine_tuning_orchestrator.fine_tune")
+def test_workflow_with_optuna_config(
+    mock_fine_tune,
+    mock_create_dataset,
+    temp_pdf_dir,
+    temp_output_dir,
+    sample_config,
+    sample_llm_config,
+    mock_dataset_result,
+    mock_training_result
+):
+    """Test workflow with custom Optuna configuration.
+
+    This test verifies that:
+    1. Optuna config is passed to fine_tune correctly
+    2. Custom hyperparameter search space is used
+    """
+    # Setup mocks
+    mock_create_dataset.return_value = mock_dataset_result
+    mock_fine_tune.return_value = mock_training_result
+
+    # Custom Optuna config
+    optuna_config = {
+        "n_trials": 10,
+        "max_epochs": 3,
+        "lora_ranks": [8, 16],
+        "learning_rates": [1e-5, 5e-5]
+    }
+
+    # Execute workflow
+    result = run_workflow(
+        pdf_dir=temp_pdf_dir,
+        output_dir=temp_output_dir,
+        base_model="unsloth/Llama-3.2-3B-Instruct",
+        config=sample_config,
+        llm_provider="groq",
+        llm_config=sample_llm_config,
+        optuna_config=optuna_config
+    )
+
+    # Verify success
+    assert result["status"] == "success"
+
+    # Verify fine_tune was called with optuna_config
+    mock_fine_tune.assert_called_once()
+    call_args = mock_fine_tune.call_args
+    assert call_args.kwargs["optuna_config"] == optuna_config
+
+
+@patch("unsloth_fine_tuning_orchestrator.create_dataset")
+@patch("unsloth_fine_tuning_orchestrator.fine_tune")
+def test_workflow_creates_run_directory(
+    mock_fine_tune,
+    mock_create_dataset,
+    temp_pdf_dir,
+    temp_output_dir,
+    sample_config,
+    sample_llm_config,
+    mock_dataset_result,
+    mock_training_result
+):
+    """Test that workflow creates proper run directory structure.
+
+    This test verifies that:
+    1. Run directory is created with timestamp
+    2. Subdirectories are created for dataset, training, evaluation
+    3. Run ID is included in result
+    """
+    # Setup mocks
+    mock_create_dataset.return_value = mock_dataset_result
+    mock_fine_tune.return_value = mock_training_result
+
+    # Execute workflow
+    result = run_workflow(
+        pdf_dir=temp_pdf_dir,
+        output_dir=temp_output_dir,
+        base_model="unsloth/Llama-3.2-3B-Instruct",
+        config=sample_config,
+        llm_provider="groq",
+        llm_config=sample_llm_config
+    )
+
+    # Verify run directory was created
+    run_dir = Path(result["paths"]["run_dir"])
+    assert run_dir.exists()
+    assert run_dir.is_dir()
+
+    # Verify subdirectories exist
+    assert (run_dir / "dataset").exists()
+    assert (run_dir / "training").exists()
+    assert (run_dir / "evaluation").exists()
+
+    # Verify run_id format (YYYYMMDD_HHMMSS)
+    run_id = result["run_id"]
+    assert len(run_id) == 15  # YYYYMMDD_HHMMSS
+    assert run_id[8] == "_"
+    assert run_id[:8].isdigit()
+    assert run_id[9:].isdigit()
+
+
+@patch("unsloth_fine_tuning_orchestrator.create_dataset")
+@patch("unsloth_fine_tuning_orchestrator.fine_tune")
+def test_workflow_dataset_paths_passed_to_training(
+    mock_fine_tune,
+    mock_create_dataset,
+    temp_pdf_dir,
+    temp_output_dir,
+    sample_config,
+    sample_llm_config,
+    mock_dataset_result,
+    mock_training_result
+):
+    """Test that dataset output paths are correctly passed to training.
+
+    This test verifies that:
+    1. Dataset directory path is constructed correctly
+    2. Train and eval dataset paths are passed to fine_tune
+    3. Paths use correct filenames (dataset_train.jsonl, dataset_eval.jsonl)
+    """
+    # Setup mocks
+    mock_create_dataset.return_value = mock_dataset_result
+    mock_fine_tune.return_value = mock_training_result
+
+    # Execute workflow
+    result = run_workflow(
+        pdf_dir=temp_pdf_dir,
+        output_dir=temp_output_dir,
+        base_model="unsloth/Llama-3.2-3B-Instruct",
+        config=sample_config,
+        llm_provider="groq",
+        llm_config=sample_llm_config
+    )
+
+    # Verify fine_tune was called with correct dataset paths
+    mock_fine_tune.assert_called_once()
+    call_args = mock_fine_tune.call_args
+
+    # Check train and eval dataset paths
+    train_dataset = call_args.kwargs["train_dataset"]
+    eval_dataset = call_args.kwargs["eval_dataset"]
+
+    assert "dataset_train.jsonl" in train_dataset
+    assert "dataset_eval.jsonl" in eval_dataset
+    assert result["paths"]["dataset_dir"] in train_dataset
+    assert result["paths"]["dataset_dir"] in eval_dataset
