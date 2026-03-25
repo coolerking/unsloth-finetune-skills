@@ -1,6 +1,10 @@
-# Unsloth Fine-Tuning Skills
+<p align="center">
+  <img src="assets/unsloth-fine-tuning-skills-title.svg" alt="Unsloth Fine-Tuning Skills" width="100%" />
+</p>
 
-Claude Code用のファインチューニングスキルスイート。PDFから学習データセットを作成し、Unslothを使用してLLMを効率的にファインチューニングできます。
+<p align="center">
+  Claude Code用のファインチューニングスキルスイート。PDFから学習データセットを作成し、Unslothを使用してLLMを効率的にファインチューニングできます。
+</p>
 
 ## 概要
 
